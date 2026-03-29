@@ -17,6 +17,7 @@ const CHANNEL_ID = '1487857865929527378';
 const CHECK_INTERVAL = 60_000; // فحص كل دقيقة
 
 let isLive = false;
+let notificationSent = false;
 let tiktokConnection = null;
 
 // ─── دالة مراقبة التيك توك ────────────────────────────────────────────────────
@@ -34,15 +35,19 @@ async function startMonitoring() {
 
       tiktokConnection.connect()
         .then(state => {
-          if (!isLive) {
+          if (!isLive && !notificationSent) {
             isLive = true;
+            notificationSent = true;
             console.log(`🔴 @${TIKTOK_USERNAME} فاك بث!`);
             sendLiveNotification(state);
+          } else if (!isLive) {
+            isLive = true;
           }
         })
         .catch(() => {
           if (isLive) {
             isLive = false;
+            notificationSent = false; // reset عشان البث الجديد
             console.log(`⚫ @${TIKTOK_USERNAME} أنهى البث`);
           }
         });

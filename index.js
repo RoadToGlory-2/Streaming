@@ -14,58 +14,52 @@ const client = new Client({
 // ─── الإعدادات ────────────────────────────────────────────────────────────────
 const TIKTOK_USERNAME = 'i2kq';
 const CHANNEL_ID = '1487857865929527378';
-const CHECK_INTERVAL = 60_000; // فحص كل دقيقة
 
 let isLive = false;
-let notificationSent = false;
-let tiktokConnection = null;
 
 // ─── دالة مراقبة التيك توك ────────────────────────────────────────────────────
 async function startMonitoring() {
   console.log(`🔍 جاري مراقبة حساب @${TIKTOK_USERNAME} على تيك توك...`);
 
-  async function checkLive() {
-    try {
-      if (tiktokConnection) {
-        tiktokConnection.disconnect();
-        tiktokConnection = null;
+  async function connect() {
+    const tiktokConnection = new WebcastPushConnection(TIKTOK_USERNAME);
+
+    tiktokConnection.connect()
+      .then(() => {
+        if (!isLive) {
+          isLive = true;
+          console.log(`🔴 @${TIKTOK_USERNAME} فاك بث!`);
+          sendLiveNotification();
+        }
+      })
+      .catch(() => {
+        // مو ببث حالياً
+        isLive = false;
+      });
+
+    tiktokConnection.on('streamEnd', () => {
+      console.log(`⚫ @${TIKTOK_USERNAME} أنهى البث`);
+      isLive = false;
+      // انتظر دقيقتين ثم راقب من جديد
+      setTimeout(connect, 120_000);
+    });
+
+    tiktokConnection.on('disconnected', () => {
+      if (isLive) {
+        isLive = false;
+        setTimeout(connect, 120_000);
+      } else {
+        // مو ببث، حاول بعد دقيقة
+        setTimeout(connect, 60_000);
       }
-
-      tiktokConnection = new WebcastPushConnection(TIKTOK_USERNAME);
-
-      tiktokConnection.connect()
-        .then(state => {
-          if (!isLive && !notificationSent) {
-            isLive = true;
-            notificationSent = true;
-            console.log(`🔴 @${TIKTOK_USERNAME} فاك بث!`);
-            sendLiveNotification(state);
-          } else if (!isLive) {
-            isLive = true;
-          }
-        })
-        .catch(() => {
-          if (isLive) {
-            isLive = false;
-            notificationSent = false; // reset عشان البث الجديد
-            console.log(`⚫ @${TIKTOK_USERNAME} أنهى البث`);
-          }
-        });
-
-    } catch (err) {
-      console.error('خطأ في الفحص:', err.message);
-    }
+    });
   }
 
-  // فحص فوري عند التشغيل
-  await checkLive();
-
-  // فحص كل دقيقة
-  setInterval(checkLive, CHECK_INTERVAL);
+  connect();
 }
 
 // ─── إرسال إشعار البث ────────────────────────────────────────────────────────
-async function sendLiveNotification(state) {
+async function sendLiveNotification() {
   try {
     const channel = await client.channels.fetch(CHANNEL_ID);
     if (!channel) return console.error('❌ ما لقيت الروم!');
@@ -102,7 +96,7 @@ client.on('messageCreate', async (message) => {
 
   // !testnotify — تجربة الإشعار (للأدمن فقط)
   if (command === 'testnotify') {
-    await sendLiveNotification({});
+    await sendLiveNotification();
     message.reply('✅ تم إرسال إشعار تجريبي!');
   }
 });

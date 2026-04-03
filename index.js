@@ -1,6 +1,6 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits } = require('discord.js');
-const { WebcastPushConnection } = require('tiktok-live-connector');
+const https = require('https');
 const http = require('http');
 
 const client = new Client({
@@ -13,9 +13,41 @@ const client = new Client({
 
 const TIKTOK_USERNAME = 'i2kq';
 const CHANNEL_ID = '1487857865929527378';
+const CHECK_INTERVAL = 3 * 60 * 1000; // فحص كل 3 دقائق
 
 let isLive = false;
-let isConnecting = false;
+
+// ─── فحص حالة البث عبر صفحة التيك توك ───────────────────────────────────────
+function checkIfLive() {
+  return new Promise((resolve) => {
+    const options = {
+      hostname: 'www.tiktok.com',
+      path: `/@${TIKTOK_USERNAME}/live`,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+      timeout: 10000,
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        // إذا الصفحة تحتوي على "LIVE" أو "liveRoomInfo" يعني شغال بث
+        const live = data.includes('"statusCode":0') || 
+                     data.includes('liveRoomInfo') ||
+                     data.includes('"status":2');
+        resolve(live);
+      });
+    });
+
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.end();
+  });
+}
 
 // ─── إرسال إشعار البث ────────────────────────────────────────────────────────
 async function sendLiveNotification() {
@@ -32,40 +64,26 @@ async function sendLiveNotification() {
   }
 }
 
-// ─── مراقبة التيك توك ─────────────────────────────────────────────────────────
-function startMonitoring() {
-  if (isConnecting) return;
-  isConnecting = true;
+// ─── حلقة المراقبة ───────────────────────────────────────────────────────────
+async function monitor() {
+  try {
+    const liveNow = await checkIfLive();
 
-  const connection = new WebcastPushConnection(TIKTOK_USERNAME);
-
-  connection.connect()
-    .then(() => {
-      isConnecting = false;
-      if (!isLive) {
-        isLive = true;
-        console.log(`🔴 @${TIKTOK_USERNAME} فاك بث!`);
-        sendLiveNotification();
-      }
-    })
-    .catch(() => {
-      isConnecting = false;
+    if (liveNow && !isLive) {
+      // بدأ البث
+      isLive = true;
+      console.log(`🔴 @${TIKTOK_USERNAME} فاك بث!`);
+      await sendLiveNotification();
+    } else if (!liveNow && isLive) {
+      // انتهى البث
       isLive = false;
-      setTimeout(startMonitoring, 120_000);
-    });
-
-  connection.on('streamEnd', () => {
-    console.log(`⚫ @${TIKTOK_USERNAME} أنهى البث`);
-    isLive = false;
-    isConnecting = false;
-    setTimeout(startMonitoring, 120_000);
-  });
-
-  connection.on('disconnected', () => {
-    isLive = false;
-    isConnecting = false;
-    setTimeout(startMonitoring, 120_000);
-  });
+      console.log(`⚫ @${TIKTOK_USERNAME} أنهى البث`);
+    } else {
+      console.log(`🔍 فحص... البث: ${isLive ? 'شغال' : 'أوفلاين'}`);
+    }
+  } catch (err) {
+    console.error('خطأ في المراقبة:', err.message);
+  }
 }
 
 // ─── أوامر الديسكورد (للأدمن فقط) ───────────────────────────────────────────
@@ -93,7 +111,10 @@ client.on('messageCreate', async (message) => {
 client.once('clientReady', () => {
   console.log(`✅ البوت شغال كـ ${client.user.tag}`);
   client.user.setActivity(`@${TIKTOK_USERNAME} على تيك توك`, { type: 3 });
-  startMonitoring();
+
+  // فحص فوري ثم كل 3 دقائق
+  monitor();
+  setInterval(monitor, CHECK_INTERVAL);
 });
 
 // HTTP Server

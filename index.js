@@ -11,90 +11,78 @@ const client = new Client({
   ],
 });
 
-// ─── الإعدادات ────────────────────────────────────────────────────────────────
 const TIKTOK_USERNAME = 'i2kq';
 const CHANNEL_ID = '1487857865929527378';
 
 let isLive = false;
-
-// ─── دالة مراقبة التيك توك ────────────────────────────────────────────────────
-async function startMonitoring() {
-  console.log(`🔍 جاري مراقبة حساب @${TIKTOK_USERNAME} على تيك توك...`);
-
-  async function connect() {
-    const tiktokConnection = new WebcastPushConnection(TIKTOK_USERNAME);
-
-    tiktokConnection.connect()
-      .then(() => {
-        if (!isLive) {
-          isLive = true;
-          console.log(`🔴 @${TIKTOK_USERNAME} فاك بث!`);
-          sendLiveNotification();
-        }
-      })
-      .catch(() => {
-        // مو ببث حالياً
-        isLive = false;
-      });
-
-    tiktokConnection.on('streamEnd', () => {
-      console.log(`⚫ @${TIKTOK_USERNAME} أنهى البث`);
-      isLive = false;
-      // انتظر دقيقتين ثم راقب من جديد
-      setTimeout(connect, 120_000);
-    });
-
-    tiktokConnection.on('disconnected', () => {
-      if (isLive) {
-        isLive = false;
-        setTimeout(connect, 120_000);
-      } else {
-        // مو ببث، حاول بعد دقيقة
-        setTimeout(connect, 60_000);
-      }
-    });
-  }
-
-  connect();
-}
+let isConnecting = false;
 
 // ─── إرسال إشعار البث ────────────────────────────────────────────────────────
 async function sendLiveNotification() {
   try {
     const channel = await client.channels.fetch(CHANNEL_ID);
-    if (!channel) return console.error('❌ ما لقيت الروم!');
-
+    if (!channel) return;
     await channel.send(
       `@everyone 🔴 **${TIKTOK_USERNAME}** فاك بث على تيك توك الحين!\n` +
       `🎥 شوف البث: https://www.tiktok.com/@${TIKTOK_USERNAME}/live`
     );
-
     console.log('✅ تم إرسال إشعار البث!');
   } catch (err) {
     console.error('خطأ في إرسال الإشعار:', err.message);
   }
 }
 
-// ─── أوامر الديسكورد ──────────────────────────────────────────────────────────
+// ─── مراقبة التيك توك ─────────────────────────────────────────────────────────
+function startMonitoring() {
+  if (isConnecting) return;
+  isConnecting = true;
+
+  const connection = new WebcastPushConnection(TIKTOK_USERNAME);
+
+  connection.connect()
+    .then(() => {
+      isConnecting = false;
+      if (!isLive) {
+        isLive = true;
+        console.log(`🔴 @${TIKTOK_USERNAME} فاك بث!`);
+        sendLiveNotification();
+      }
+    })
+    .catch(() => {
+      isConnecting = false;
+      isLive = false;
+      setTimeout(startMonitoring, 120_000);
+    });
+
+  connection.on('streamEnd', () => {
+    console.log(`⚫ @${TIKTOK_USERNAME} أنهى البث`);
+    isLive = false;
+    isConnecting = false;
+    setTimeout(startMonitoring, 120_000);
+  });
+
+  connection.on('disconnected', () => {
+    isLive = false;
+    isConnecting = false;
+    setTimeout(startMonitoring, 120_000);
+  });
+}
+
+// ─── أوامر الديسكورد (للأدمن فقط) ───────────────────────────────────────────
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   if (!message.content.startsWith('!')) return;
-
-  const isAdmin = message.member?.permissions.has('Administrator');
-  if (!isAdmin) return;
+  if (!message.member?.permissions.has('Administrator')) return;
 
   const command = message.content.slice(1).trim().toLowerCase();
 
-  // !livestatus — حالة البث الحالية
   if (command === 'livestatus') {
-    message.reply(
-      isLive
-        ? `🔴 @${TIKTOK_USERNAME} شغال بث الحين!`
-        : `⚫ @${TIKTOK_USERNAME} مو ببث حالياً`
+    message.reply(isLive
+      ? `🔴 @${TIKTOK_USERNAME} شغال بث الحين!`
+      : `⚫ @${TIKTOK_USERNAME} مو ببث حالياً`
     );
   }
 
-  // !testnotify — تجربة الإشعار (للأدمن فقط)
   if (command === 'testnotify') {
     await sendLiveNotification();
     message.reply('✅ تم إرسال إشعار تجريبي!');
@@ -102,18 +90,16 @@ client.on('messageCreate', async (message) => {
 });
 
 // ─── تشغيل البوت ─────────────────────────────────────────────────────────────
-client.once('ready', async () => {
+client.once('clientReady', () => {
   console.log(`✅ البوت شغال كـ ${client.user.tag}`);
   client.user.setActivity(`@${TIKTOK_USERNAME} على تيك توك`, { type: 3 });
-  await startMonitoring();
+  startMonitoring();
 });
 
-// HTTP Server عشان Railway/Render
+// HTTP Server
 http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.writeHead(200);
   res.end('OK');
-}).listen(process.env.PORT || 3000, '0.0.0.0', () => {
-  console.log(`🌐 HTTP Server شغال على port ${process.env.PORT || 3000}`);
-});
+}).listen(process.env.PORT || 3000, '0.0.0.0');
 
 client.login(process.env.DISCORD_TOKEN);
